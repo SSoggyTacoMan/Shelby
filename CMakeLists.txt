@@ -19,6 +19,7 @@ pico_sdk_init()
 
 add_executable(shelby_native
   main.cpp
+  Display.cpp
 )
 
 target_link_libraries(shelby_native
@@ -29,6 +30,8 @@ target_link_libraries(shelby_native
   pico_mbedtls
   pico_lwip_mbedtls
 )
+
+target_include_directories(shelby_native PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
 pico_enable_stdio_usb(shelby_native 1)
 pico_enable_stdio_uart(shelby_native 0)
