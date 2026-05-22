@@ -15,6 +15,7 @@ pico_sdk_init()
 
 add_executable(shelby_native
     src_cpp/main.cpp
+    src_cpp/Display.cpp
 )
 
 target_link_libraries(shelby_native
