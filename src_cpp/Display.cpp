@@ -8,6 +8,10 @@
 namespace {
 
 constexpr uint32_t kSpiBaud = 8 * 1000 * 1000;
+constexpr uint32_t kResetDelayUs = 150000;
+constexpr uint32_t kSleepOutDelayUs = 255000;
+constexpr uint32_t kNormalOnDelayUs = 10000;
+constexpr uint32_t kDisplayOnDelayUs = 100000;
 
 constexpr uint8_t ST7735_SWRESET = 0x01;
 constexpr uint8_t ST7735_SLPOUT = 0x11;
@@ -186,10 +190,10 @@ void Display::init() {
     reset();
 
     writeCommand(ST7735_SWRESET);
-    sleep_us(150000);
+    sleep_us(kResetDelayUs);
 
     writeCommand(ST7735_SLPOUT);
-    sleep_us(255000);
+    sleep_us(kSleepOutDelayUs);
 
     const uint8_t frame[] = {0x01, 0x2C, 0x2D};
     writeCommand(ST7735_FRMCTR1);
@@ -246,9 +250,9 @@ void Display::init() {
     writeData(gamma_neg, sizeof(gamma_neg));
 
     writeCommand(ST7735_NORON);
-    sleep_us(10000);
+    sleep_us(kNormalOnDelayUs);
     writeCommand(ST7735_DISPON);
-    sleep_us(100000);
+    sleep_us(kDisplayOnDelayUs);
 
     fillScreen(0x0000);
 }
