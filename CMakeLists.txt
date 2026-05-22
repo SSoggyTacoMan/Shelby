@@ -16,12 +16,15 @@ pico_sdk_init()
 add_executable(shelby_native
     src_cpp/main.cpp
     src_cpp/Display.cpp
+    src_cpp/NetworkManager.cpp
 )
 
 target_link_libraries(shelby_native
     pico_stdlib
     hardware_spi
     hardware_gpio
+    hardware_rtc
+    pico_mbedtls
     pico_cyw43_arch_lwip_threadsafe_background
 )
 
