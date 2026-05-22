@@ -14,7 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 pico_sdk_init()
 
 add_executable(shelby_native
-    /home/runner/work/Shelby/Shelby/src_cpp/main.cpp
+    src_cpp/main.cpp
 )
 
 target_link_libraries(shelby_native
@@ -25,7 +25,7 @@ target_link_libraries(shelby_native
 )
 
 target_include_directories(shelby_native PRIVATE
-    /home/runner/work/Shelby/Shelby/src_cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src_cpp
 )
 
 pico_enable_stdio_usb(shelby_native 0)

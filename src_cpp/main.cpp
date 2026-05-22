@@ -86,11 +86,20 @@ void tft_fill_screen(uint16_t color565, uint16_t width, uint16_t height) {
         static_cast<uint8_t>(color565 >> 8),
         static_cast<uint8_t>(color565 & 0xFF),
     };
+    constexpr size_t kChunkPixels = 64;
+    uint8_t chunk[kChunkPixels * 2];
+    for (size_t i = 0; i < kChunkPixels; ++i) {
+        chunk[i * 2] = pixel[0];
+        chunk[i * 2 + 1] = pixel[1];
+    }
 
     gpio_put(kPinDc, 1);
     tft_select();
-    for (uint32_t i = 0; i < static_cast<uint32_t>(width) * height; ++i) {
-        spi_write_blocking(kDisplaySpi, pixel, 2);
+    uint32_t remaining = static_cast<uint32_t>(width) * height;
+    while (remaining > 0) {
+        const uint32_t batch_pixels = remaining > kChunkPixels ? kChunkPixels : remaining;
+        spi_write_blocking(kDisplaySpi, chunk, static_cast<int>(batch_pixels * 2));
+        remaining -= batch_pixels;
     }
     tft_deselect();
 }
