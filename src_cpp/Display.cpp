@@ -215,12 +215,12 @@ void Display::init() {
     writeCommand(ST7735_PWCTR2);
     writeDataByte(0xC5);
 
-    const uint8_t pwctrx[] = {0x8A, 0x2A};
     const uint8_t pwctr3[] = {0x0A, 0x00};
+    const uint8_t pwctr4[] = {0x8A, 0x2A};
     writeCommand(ST7735_PWCTR3);
     writeData(pwctr3, sizeof(pwctr3));
     writeCommand(ST7735_PWCTR4);
-    writeData(pwctrx, sizeof(pwctrx));
+    writeData(pwctr4, sizeof(pwctr4));
 
     const uint8_t pwctr5[] = {0x8A, 0xEE};
     writeCommand(ST7735_PWCTR5);
