@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/types.h>
 #include <ctime>
 #include <strings.h>
 
@@ -221,14 +222,18 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
     mbedtls_net_context net;
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
+    mbedtls_x509_crt cacert;
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
 
     mbedtls_net_init(&net);
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_config_init(&conf);
+    mbedtls_x509_crt_init(&cacert);
     mbedtls_entropy_init(&entropy);
     mbedtls_ctr_drbg_init(&ctr_drbg);
+
+    const absolute_time_t deadline = make_timeout_time_ms(req.timeout_ms);
 
     const char* pers = "shelby_net";
     int rc = mbedtls_ctr_drbg_seed(&ctr_drbg,
@@ -256,7 +261,22 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
         goto cleanup;
     }
 
-    mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_NONE);
+    if (req.ca_cert_pem != nullptr && std::strlen(req.ca_cert_pem) > 0) {
+        rc = mbedtls_x509_crt_parse(
+            &cacert,
+            reinterpret_cast<const unsigned char*>(req.ca_cert_pem),
+            std::strlen(req.ca_cert_pem) + 1
+        );
+        if (rc != 0) {
+            goto cleanup;
+        }
+        mbedtls_ssl_conf_ca_chain(&conf, &cacert, nullptr);
+        mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+    } else if (req.allow_insecure) {
+        mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_NONE);
+    } else {
+        goto cleanup;
+    }
     mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &ctr_drbg);
 
     rc = mbedtls_ssl_setup(&ssl, &conf);
@@ -272,6 +292,9 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
     mbedtls_ssl_set_bio(&ssl, &net, mbedtls_net_send, mbedtls_net_recv, nullptr);
 
     do {
+        if (time_reached(deadline)) {
+            goto cleanup;
+        }
         rc = mbedtls_ssl_handshake(&ssl);
         if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
             poll();
@@ -311,6 +334,9 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
 
     size_t written = 0;
     while (written < static_cast<size_t>(head_len)) {
+        if (time_reached(deadline)) {
+            goto cleanup;
+        }
         rc = mbedtls_ssl_write(&ssl,
                                reinterpret_cast<const unsigned char*>(request_head + written),
                                static_cast<size_t>(head_len) - written);
@@ -327,6 +353,9 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
 
     written = 0;
     while (req.body != nullptr && written < req.body_size) {
+        if (time_reached(deadline)) {
+            goto cleanup;
+        }
         const size_t remain = req.body_size - written;
         const size_t chunk = std::min(remain, static_cast<size_t>(256));
         rc = mbedtls_ssl_write(&ssl, req.body + written, chunk);
@@ -341,14 +370,39 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
         goto cleanup;
     }
 
+    auto emit_body = [&](const uint8_t* data, size_t len) -> bool {
+        if (data == nullptr || len == 0) {
+            return true;
+        }
+        if (out.body_bytes >= req.max_body_bytes) {
+            return true;
+        }
+
+        const size_t accepted = std::min(len, req.max_body_bytes - out.body_bytes);
+        if (accepted > 0 && on_chunk != nullptr) {
+            if (!on_chunk(data, accepted, user)) {
+                return false;
+            }
+        }
+        out.body_bytes += accepted;
+        return true;
+    };
+
     std::array<char, kIoBufSize> rx{};
     bool parsed_headers = false;
     int content_length = -1;
     bool chunked = false;
     std::array<char, 1024> header_buf{};
     size_t header_len = 0;
+    std::array<char, kIoBufSize * 2> chunk_buf{};
+    size_t chunk_buf_len = 0;
+    ssize_t chunk_remaining = -1;
+    bool chunk_complete = false;
 
     while (true) {
+        if (time_reached(deadline)) {
+            goto cleanup;
+        }
         rc = mbedtls_ssl_read(&ssl, reinterpret_cast<unsigned char*>(rx.data()), rx.size());
         if (rc == 0) {
             break;
@@ -413,31 +467,84 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
             const size_t header_bytes = static_cast<size_t>(body_start - header_buf.data());
             const size_t body_in_header_buf = (header_len > header_bytes) ? (header_len - header_bytes) : 0;
             if (body_in_header_buf > 0) {
-                const size_t accepted = std::min(body_in_header_buf, req.max_body_bytes - out.body_bytes);
-                if (accepted > 0 && on_chunk != nullptr) {
-                    if (!on_chunk(reinterpret_cast<const uint8_t*>(body_start), accepted, user)) {
+                if (!chunked) {
+                    if (!emit_body(reinterpret_cast<const uint8_t*>(body_start), body_in_header_buf)) {
                         goto cleanup;
                     }
+                } else {
+                    const size_t copy_len = std::min(body_in_header_buf, chunk_buf.size() - chunk_buf_len);
+                    std::memcpy(chunk_buf.data() + chunk_buf_len, body_start, copy_len);
+                    chunk_buf_len += copy_len;
                 }
-                out.body_bytes += accepted;
             }
-            continue;
-        }
-
-        const size_t accepted = std::min(data_len, req.max_body_bytes - out.body_bytes);
-        if (accepted > 0 && on_chunk != nullptr) {
-            if (!on_chunk(reinterpret_cast<const uint8_t*>(data), accepted, user)) {
+        } else if (!chunked) {
+            if (!emit_body(reinterpret_cast<const uint8_t*>(data), data_len)) {
                 goto cleanup;
             }
+        } else {
+            const size_t copy_len = std::min(data_len, chunk_buf.size() - chunk_buf_len);
+            if (copy_len > 0) {
+                std::memcpy(chunk_buf.data() + chunk_buf_len, data, copy_len);
+                chunk_buf_len += copy_len;
+            }
         }
-        out.body_bytes += accepted;
+
+        if (chunked) {
+            while (!chunk_complete) {
+                if (chunk_remaining < 0) {
+                    char* line_end = nullptr;
+                    for (size_t i = 1; i < chunk_buf_len; ++i) {
+                        if (chunk_buf[i - 1] == '\r' && chunk_buf[i] == '\n') {
+                            line_end = chunk_buf.data() + i - 1;
+                            break;
+                        }
+                    }
+                    if (line_end == nullptr) {
+                        break;
+                    }
+
+                    *line_end = '\0';
+                    char* semi = std::strchr(chunk_buf.data(), ';');
+                    if (semi != nullptr) {
+                        *semi = '\0';
+                    }
+                    chunk_remaining = static_cast<ssize_t>(std::strtoul(chunk_buf.data(), nullptr, 16));
+                    if (semi != nullptr) {
+                        *semi = ';';
+                    }
+                    *line_end = '\r';
+
+                    const size_t consumed = static_cast<size_t>((line_end - chunk_buf.data()) + 2);
+                    std::memmove(chunk_buf.data(), chunk_buf.data() + consumed, chunk_buf_len - consumed);
+                    chunk_buf_len -= consumed;
+
+                    if (chunk_remaining == 0) {
+                        chunk_complete = true;
+                        break;
+                    }
+                }
+
+                if (chunk_remaining >= 0 && chunk_buf_len >= static_cast<size_t>(chunk_remaining + 2)) {
+                    if (!emit_body(reinterpret_cast<const uint8_t*>(chunk_buf.data()),
+                                   static_cast<size_t>(chunk_remaining))) {
+                        goto cleanup;
+                    }
+
+                    const size_t consumed = static_cast<size_t>(chunk_remaining + 2); // + CRLF
+                    std::memmove(chunk_buf.data(), chunk_buf.data() + consumed, chunk_buf_len - consumed);
+                    chunk_buf_len -= consumed;
+                    chunk_remaining = -1;
+                    continue;
+                }
+                break;
+            }
+        }
 
         if ((content_length >= 0 && out.body_bytes >= static_cast<size_t>(content_length)) ||
-            out.body_bytes >= req.max_body_bytes) {
+            out.body_bytes >= req.max_body_bytes ||
+            chunk_complete) {
             break;
         }
-
-        (void)chunked;
     }
 
     out.success = (out.status_code >= 200 && out.status_code < 300);
@@ -447,6 +554,7 @@ cleanup:
     mbedtls_net_free(&net);
     mbedtls_ssl_free(&ssl);
     mbedtls_ssl_config_free(&conf);
+    mbedtls_x509_crt_free(&cacert);
     mbedtls_ctr_drbg_free(&ctr_drbg);
     mbedtls_entropy_free(&entropy);
     return out;

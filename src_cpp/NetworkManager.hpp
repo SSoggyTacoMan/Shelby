@@ -22,6 +22,8 @@ public:
         size_t body_size = 0;
         uint32_t timeout_ms = 15000;
         size_t max_body_bytes = 16 * 1024;        // safety cap for RAM
+        const char* ca_cert_pem = nullptr;        // required unless allow_insecure is true
+        bool allow_insecure = false;              // for bring-up only
     };
 
     struct HttpsResponse {

@@ -25,7 +25,7 @@ target_link_libraries(shelby_native
     hardware_gpio
     hardware_rtc
     pico_mbedtls
-    pico_cyw43_arch_lwip_threadsafe_background
+    pico_cyw43_arch_lwip_poll
 )
 
 target_include_directories(shelby_native PRIVATE
