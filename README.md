@@ -60,3 +60,23 @@ And you're done! Enjoy your Sprig running Shelby!!
 | L             | Open Menu when at clock screen     |
 
 Other app controls are written in the respecitve screens
+
+---
+
+# Native C++ (Pico SDK) - WIP
+
+This repo currently contains the MicroPython version of Shelby. A native rewrite is being started using the Raspberry Pi Pico C/C++ SDK.
+
+## Build (Step 1 skeleton)
+
+1. Install/clone `pico-sdk` somewhere and export `PICO_SDK_PATH`.
+2. (Optional) Create a local `secrets.hpp` (ignored by git) with:
+   - `#define WIFI_SSID "..."`  
+   - `#define WIFI_PASSWORD "..."`
+3. Build:
+
+```bash
+mkdir -p build
+cmake -S . -B build
+cmake --build build
+```
