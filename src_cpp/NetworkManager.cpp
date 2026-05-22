@@ -7,7 +7,7 @@
 #include <cstring>
 #include <sys/types.h>
 #include <ctime>
-#include <strings.h>
+#include <cctype>
 
 #include "hardware/rtc.h"
 #include "lwip/sockets.h"
@@ -25,6 +25,46 @@ namespace {
 constexpr uint32_t kWifiPollIntervalMs = 100;
 constexpr uint32_t kNtpUnixDelta = 2208988800u;
 constexpr size_t kIoBufSize = 512;
+constexpr size_t kMaxRequestHeadSize = 1024;
+constexpr size_t kMaxHttpHeaderSize = 1024;
+
+bool startsWithNoCase(const char* text, const char* prefix) {
+    if (text == nullptr || prefix == nullptr) {
+        return false;
+    }
+    while (*prefix != '\0') {
+        if (*text == '\0') {
+            return false;
+        }
+        if (std::tolower(static_cast<unsigned char>(*text)) !=
+            std::tolower(static_cast<unsigned char>(*prefix))) {
+            return false;
+        }
+        ++text;
+        ++prefix;
+    }
+    return true;
+}
+
+bool containsNoCase(const char* haystack, const char* needle) {
+    if (haystack == nullptr || needle == nullptr || *needle == '\0') {
+        return false;
+    }
+    const size_t needle_len = std::strlen(needle);
+    for (const char* p = haystack; *p != '\0'; ++p) {
+        size_t i = 0;
+        while (i < needle_len &&
+               p[i] != '\0' &&
+               std::tolower(static_cast<unsigned char>(p[i])) ==
+                   std::tolower(static_cast<unsigned char>(needle[i]))) {
+            ++i;
+        }
+        if (i == needle_len) {
+            return true;
+        }
+    }
+    return false;
+}
 
 bool epochToDatetime(time_t epoch, datetime_t* out) {
     if (out == nullptr) {
@@ -305,7 +345,7 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
         }
     } while (rc != 0);
 
-    char request_head[1024];
+    char request_head[kMaxRequestHeadSize];
     const int head_len = std::snprintf(
         request_head,
         sizeof(request_head),
@@ -392,7 +432,7 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
     bool parsed_headers = false;
     int content_length = -1;
     bool chunked = false;
-    std::array<char, 1024> header_buf{};
+    std::array<char, kMaxHttpHeaderSize> header_buf{};
     size_t header_len = 0;
     std::array<char, kIoBufSize * 2> chunk_buf{};
     size_t chunk_buf_len = 0;
@@ -452,11 +492,10 @@ NetworkManager::HttpsResponse NetworkManager::httpsRequest(const HttpsRequest& r
                 }
                 const size_t line_sz = static_cast<size_t>(next - headers_scan);
 
-                if (line_sz >= 16 && strncasecmp(headers_scan, "Content-Length:", 15) == 0) {
+                if (line_sz >= 16 && startsWithNoCase(headers_scan, "Content-Length:")) {
                     content_length = std::atoi(headers_scan + 15);
-                } else if (line_sz >= 18 && strncasecmp(headers_scan, "Transfer-Encoding:", 18) == 0) {
-                    if (std::strstr(headers_scan, "chunked") != nullptr ||
-                        std::strstr(headers_scan, "Chunked") != nullptr) {
+                } else if (line_sz >= 18 && startsWithNoCase(headers_scan, "Transfer-Encoding:")) {
+                    if (containsNoCase(headers_scan, "chunked")) {
                         chunked = true;
                     }
                 }
